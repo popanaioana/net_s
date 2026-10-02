@@ -2,30 +2,37 @@
 
 ## Violation 1 — Single Responsibility Principle (SRP)
 
-**File:** `ItemController.cs` — `GetAll()` method
+**File:** `GradeController.cs`
 
-**Why it is a violation:**
-The controller directly computes business statistics (`TotalCount`, `AverageValue`) inline inside the action method. A controller's only responsibility is to handle HTTP concerns (receive a request, delegate to a service, return a response). Aggregation and statistical logic is business logic and must not live in the controller.
+**Why it is a violation:**  
+The controller originally handled both HTTP concerns and business logic. Controllers should primarily receive requests, delegate work to the appropriate service, and return HTTP responses.
 
-Additionally, the controller uses raw `Console.WriteLine` for logging instead of the framework-provided `ILogger<T>`, mixing infrastructure concerns into the controller.
+Keeping business rules directly inside the controller makes the code harder to maintain and test.
 
 **Fix applied:**
-- Moved all business logic (passing-grade filter, statistics computation) into `GradeService`.
-- Injected `ILogger<GradeController>` and replaced every `Console.WriteLine` with structured log calls (`_logger.LogInformation`, `_logger.LogWarning`).
+- Introduced `IGradeService` and `GradeService` to separate business logic from HTTP handling.
+- The controller delegates grade-related operations to the service layer.
+- Added `ILogger<GradeController>` for structured application logging.
 
 ---
 
-## Violation 2 — Single Responsibility Principle (SRP) / Missing Service Layer
+## Violation 2 — Missing Service Layer / Separation of Concerns
 
-**Files:** `ItemController.cs`, `ItemRepository.cs`
+**Files:** `GradeController.cs`, `GradeService.cs`, `IGradeService.cs`
 
-**Why it is a violation:**
-There is no service layer. Business rules (e.g., "only active items", "passing grade ≥ 5") are either implied inside the repository's LINQ queries or computed ad-hoc in the controller. The repository's job is data access; the controller's job is HTTP handling. Neither should own business logic.
+**Why it is a violation:**  
+Without a dedicated service layer, business rules can become mixed with HTTP handling or data-access logic.
 
-**Fix applied:**
-Introduced `IGradeService` / `GradeService`. All business rules now live there:
-- `GetTopPassingGradesAsync(int count)` filters active grades with `Value >= 5` and takes the first `count` results.
-- The controller delegates entirely to the service and does no filtering or computation itself.
+This creates unnecessary coupling between the controller and repository and makes future changes more difficult.
+
+**Fix applied:**  
+Introduced the `IGradeService` / `GradeService` abstraction.
+
+The application now follows a layered structure:
+
+`Controller → Service → Repository`
+
+The controller handles HTTP requests, the service coordinates business operations, and the repository is responsible for retrieving grade data.
 
 ---
 
@@ -33,65 +40,117 @@ Introduced `IGradeService` / `GradeService`. All business rules now live there:
 
 **File:** `Program.cs`
 
-**Why it is a violation:**
-The original `Program.cs` registered no services at all — `IItemReader` was never registered in the DI container, so injecting it into `ItemController` would throw a runtime `InvalidOperationException`. High-level modules (controller) must depend on abstractions registered through the DI system.
+**Why it is a violation:**  
+High-level components such as controllers and services should depend on abstractions rather than concrete implementations.
 
-**Fix applied:**
-Registered both abstractions in `Program.cs`:
-```csharp
-builder.Services.AddSingleton<IGradeReader, GradeRepository>();
-builder.Services.AddScoped<IGradeService, GradeService>();
-```
+Directly creating repository or service implementations would tightly couple the components and make the application harder to test or extend.
+
+**Fix applied:**  
+Dependencies are registered through ASP.NET Core's dependency injection container.
+
+The application uses abstractions such as:
+
+- `IGradeReader`
+- `IGradeService`
+
+The current repository implementation is injected through the DI container instead of being instantiated directly by the controller or service.
+
+This makes it possible to replace the data source without modifying the higher-level components.
 
 ---
 
-## Violation 4 — Interface Segregation Principle (ISP) / Naming
+## Violation 4 — Domain Naming and Code Clarity
 
-**File:** `IItemReader.cs`, `Item.cs`, `ItemController.cs`, `ItemRepository.cs`
+**Files:** Model, repository, service, and controller classes
 
-**Why it is a violation:**
-The domain is a GradeBook, yet the model is called `Item`, the interface `IItemReader`, the repository `ItemRepository`, and the controller `ItemController`. The interface name `IItemReader` also leaks the implementation concern ("reader") without clearly expressing the domain concept. Generic names obscure intent, making the codebase harder to understand and maintain.
+**Why it is a problem:**  
+The original implementation used generic names such as `Item`, `IItemReader`, `ItemRepository`, and `ItemController`.
 
-**Fix applied:**
-Renamed throughout to use the correct ubiquitous language:
+Because the application represents a GradeBook, these names did not clearly communicate the purpose of the classes.
+
+Clear domain terminology improves readability and maintainability.
+
+**Fix applied:**  
+The application was renamed to use GradeBook-specific terminology:
+
 - `Item` → `Grade`
 - `IItemReader` → `IGradeReader`
-- `ItemRepository` → `GradeRepository`
+- `ItemRepository` → Grade repository implementation
 - `ItemController` → `GradeController`
+
+This makes the responsibilities of the classes easier to understand.
 
 ---
 
 ## Violation 5 — Open/Closed Principle (OCP)
 
-**File:** `ItemController.cs` — `GetAll()` method
+**Files:** `GradeController.cs`, `GradeService.cs`
 
-**Why it is a violation:**
-The statistics block (`TotalCount`, `AverageValue`) is hard-coded in the controller action. Adding any new statistic or changing the filtering criteria requires modifying the controller directly. The system is not open for extension without modification.
+**Why it is a violation:**  
+When business rules are hard-coded directly inside controller actions, changing or extending those rules requires modifying the HTTP layer.
 
-**Fix applied:**
-By pushing all computation into the service layer (`GradeService`), new business rules or statistics can be added to the service (or new service implementations) without touching the controller. The controller simply calls `_gradeService.GetAllGradesAsync()` and returns the result.
+This creates unnecessary coupling between API behavior and business logic.
 
----
+**Fix applied:**  
+Business operations are delegated to the service layer.
 
-## Violation 6 — Single Responsibility Principle (SRP) — Route constraint missing
+This allows new grade-related rules and operations to be introduced in the service layer without requiring the controller to manage their implementation details.
 
-**File:** `ItemController.cs` — `GetById(int id)` 
-
-**Why it is a violation:**
-The route `[HttpGet("{id}")]` does not constrain the `{id}` segment to integers. A non-numeric URL segment like `/api/item/abc` would reach the action and fail with an unhandled format exception rather than a clean 404/400.
-
-**Fix applied:**
-Changed to `[HttpGet("{id:int}")]` so the routing layer rejects non-integer segments before the action is invoked.
+The separation also makes alternative implementations easier to introduce through interfaces and dependency injection.
 
 ---
 
-## Summary Table
+## Violation 6 — API Route Validation
 
-| # | Principle | File(s) | Fix |
-|---|-----------|---------|-----|
-| 1 | SRP | `ItemController.cs` | Moved stats/logging to service + ILogger |
-| 2 | SRP (missing layer) | `ItemController.cs`, `ItemRepository.cs` | Introduced `IGradeService` / `GradeService` |
-| 3 | DIP | `Program.cs` | Registered `IGradeReader` and `IGradeService` in DI |
-| 4 | ISP / Naming | All files | Renamed to `Grade`, `IGradeReader`, `GradeRepository`, `GradeController` |
-| 5 | OCP | `ItemController.cs` | Pushed business logic to service layer |
-| 6 | SRP | `ItemController.cs` | Added `{id:int}` route constraint |
+**File:** `GradeController.cs`
+
+**Why it is a problem:**  
+An unconstrained route parameter such as:
+
+```csharp
+[HttpGet("{id}")]
+```
+
+can match values that are not valid integers.
+
+**Fix applied:**  
+The route uses an integer constraint:
+
+```csharp
+[HttpGet("{id:int}")]
+```
+
+ASP.NET Core routing can therefore reject incompatible route values before the controller action is executed.
+
+---
+
+## Summary
+
+| # | Principle / Concern | Area | Improvement |
+|---|---|---|---|
+| 1 | SRP | Controller | Separated HTTP handling from business operations |
+| 2 | Separation of Concerns | Architecture | Introduced a service layer |
+| 3 | DIP | Dependency Injection | Components depend on interfaces |
+| 4 | Domain Naming | Project structure | Replaced generic `Item` terminology with `Grade` terminology |
+| 5 | OCP | Controller / Service | Business behavior can evolve outside the HTTP layer |
+| 6 | API Design | Routing | Added an integer route constraint |
+
+## Resulting Architecture
+
+The refactored application follows a clearer layered architecture:
+
+```text
+HTTP Request
+     ↓
+GradeController
+     ↓
+IGradeService
+     ↓
+GradeService
+     ↓
+IGradeReader
+     ↓
+Repository / External Data Source
+```
+
+This structure reduces coupling between components and makes the application easier to maintain, test, and extend.
